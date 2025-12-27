@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Windows.Forms;
 
 namespace GWTool
@@ -12,9 +11,12 @@ namespace GWTool
         [STAThread]
         static void Main()
         {
+            // warm up the thread helper.
+            _ = ThreadHelper.Current;
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new Main());
+            Application.Run(new UI.Main());
         }
     }
 }

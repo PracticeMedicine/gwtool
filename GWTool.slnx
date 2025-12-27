@@ -1,0 +1,23 @@
+<Solution>
+	<Configurations>
+		<Platform Name="AnyCPU" />
+		<Platform Name="x64" />
+		<Platform Name="x86" />
+	</Configurations>
+	<Folder Name="/Solution Items/">
+		<File Path=".editorconfig" />
+		<File Path=".gitattributes" />
+		<File Path=".gitignore" />
+		<File Path="Directory.Build.props" />
+		<File Path="Directory.Packages.props" />
+		<File Path="LICENSE.md" />
+		<File Path="README.md" />
+	</Folder>
+	<Folder Name="/Main/">
+		<Project Path="GWTool/GWTool.csproj">
+			<Platform Solution="*|AnyCPU" Project="AnyCPU" />
+			<Platform Solution="*|x64" Project="x64" />
+			<Platform Solution="*|x86" Project="x86" />
+		</Project>
+	</Folder>
+</Solution>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+	<PropertyGroup>
+		<SrcDir>$(SolutionDir)\src</SrcDir>
+
+		<GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+		<Company>PracticeMedicine</Company>
+		<TargetFramework>net48</TargetFramework>
+		<ImplicitUsings>disable</ImplicitUsings>
+		<TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+		<EnableNETAnalyzers>true</EnableNETAnalyzers>
+		<Platforms>AnyCPU;x64;x86</Platforms>
+		<OutputPath>$(SolutionDir)\bin\$(Platform)</OutputPath>
+	</PropertyGroup>
+	<ItemGroup>
+	</ItemGroup>
+</Project>

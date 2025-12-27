@@ -1,30 +1,30 @@
-﻿// Decompiled with JetBrains decompiler
-// Type: GWTool.Main
-// Assembly: GWTool, Version=0.3.0.0, Culture=neutral, PublicKeyToken=null
-
-// Modification of GWTool
+﻿// Modification of GWTool
 
 using System;
 using System.ComponentModel;
 using System.Drawing;
 using System.IO;
-using System.Linq;
 using System.Runtime.Remoting.Metadata.W3cXsd2001;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
-//#nullable disable
-namespace GWTool
-{
-    public class Main : Form
-    {
-        private string[] args = Environment.GetCommandLineArgs();
+using Microsoft.VisualStudio.Threading;
 
-        private IContainer components = (IContainer)null;
+namespace GWTool.UI
+{
+    public partial class Main : Form
+    {
+        private readonly string[] args = Environment.GetCommandLineArgs();
+
+        private readonly IContainer components = (IContainer)null;
+        private bool _enableDragDrop = false;
         private Label lblInfo;
         private Label lblResult;
         private Button btnOpenFile;
         private OpenFileDialog openFileDialog1;
         private Label lblVersion;
+        private JoinableTask _task;
 
         public Main()
         {
@@ -33,65 +33,95 @@ namespace GWTool
 
         private void Main_DragEnter(object sender, DragEventArgs e)
         {
-            e.Effect = DragDropEffects.All;
+            e.Effect = _enableDragDrop ? DragDropEffects.All : DragDropEffects.None;
         }
 
         private void Main_DragDrop(object sender, DragEventArgs e)
         {
-            foreach (string file in (string[])e.Data.GetData(DataFormats.FileDrop))
-                HandleFile(file);
+            if (!_enableDragDrop)
+                return;
+
+            _task = ThreadHelper.Current.RunAsync(async delegate
+            {
+                await TaskScheduler.Default;
+                foreach (string file in (string[])e.Data.GetData(DataFormats.FileDrop))
+                    await HandleFileAsync(file);
+            });
         }
 
-        private void HandleFile(string file)
+        private void SetStatus(string text) =>
+            SetStatus(text, Color.Black);
+        private void SetStatus(string text, Color color) =>
+            this.InvokeIfRequired(() =>
+            {
+                this.lblResult.ForeColor = color;
+                this.lblResult.Text = text;
+            });
+
+        private async Task HandleFileAsync(string file)
         {
-            Main.FileType type = this.AnalyzeFile(file);
+            var type = await AnalyzeFileAsync(file);
             if (type == FileType.Unknown)
             {
-                this.lblResult.ForeColor = Color.Red;
-                this.lblResult.Text = "I don't know what type this file is :(";
+                await this.InvokeAsyncIfRequired(() =>
+                    SetStatus("I don't know what type this file is :(", Color.Red));
             }
             else
             {
-                this.lblResult.Text = "The file is a " + type.ToString() + " file!\r\n";
-                string extension = this.GetExtension(type);
+                await this.InvokeAsyncIfRequired(delegate
+                {
+                    _enableDragDrop = false;
+                    this.btnOpenFile.Enabled = false;
+                    SetStatus("The file is a " + type.ToString() + " file!\r\n");
+                });
+                var extension = GetExtension(type);
                 if (new FileInfo(file).Extension != extension)
                 {
-                    string destFileName = file + extension;
+                    var destFileName = file + extension;
                     File.Move(file, destFileName);
                     file = destFileName;
-                    this.lblResult.ForeColor = Color.Green;
-                    this.lblResult.Text += "Added proper extension to the file";
+                    await this.InvokeAsyncIfRequired(() =>
+                        SetStatus("Added proper extension to the file", Color.Green));
                 }
                 switch (type)
                 {
                     case FileType.GMAD:
-                        this.lblResult.Text = "Extracting GMAD file...";
+                        await this.InvokeAsyncIfRequired(() =>
+                            SetStatus("Extracting GMAD file..."));
                         try
                         {
-                            GMADTool.Extract(file, Path.GetDirectoryName(file));
+                            await GMADTool.ExtractAsync(file, Path.GetDirectoryName(file), CancellationToken.None);
                         }
                         catch (Exception ex)
                         {
-                            int num = (int)MessageBox.Show(ex.ToString(), "Exception occured");
-                            this.lblResult.ForeColor = Color.Red;
-                            this.lblResult.Text = "Failed to extract the GMAD file.";
-                            break;
+                            MessageBox.Show(ex.ToString(), "Exception occured");
+
+                            await this.InvokeAsyncIfRequired(() =>
+                                SetStatus("Failed to extract the GMAD file.", Color.Red));
+                            return;
                         }
-                        this.lblResult.ForeColor = Color.Green;
-                        this.lblResult.Text = "Successfully extracted the GMAD file!";
+                        await this.InvokeAsyncIfRequired(() =>
+                            SetStatus("Successfully extracted the GMAD file!", Color.Green));
                         break;
                     case FileType.LZMA:
-                        this.lblResult.Text = "This file seems to be downloaded directly from the Steam server\nPlease extract this with 7-Zip.\n" +
-                            "The archive's file name is the same as the .gma file that your trying to extract.";
+                        await this.InvokeAsyncIfRequired(() =>
+                            SetStatus("This GMA file seems to be compressed (LZMA). Please extract this with 7-Zip and drag the extracted GMA file here.", Color.Yellow));
                         break;
                     default:
-                        this.lblResult.Text += "Now just put this file in the correct directory in GMOD!\n(ex. garrysmod/addons)";
+                        await this.InvokeAsyncIfRequired(() =>
+                            SetStatus("Now just put this file in the correct directory in GMOD!\n(ex. garrysmod/addons)"));
                         break;
                 }
+
+                await this.InvokeAsyncIfRequired(delegate
+                {
+                    _enableDragDrop = true;
+                    this.btnOpenFile.Enabled = true;
+                });
             }
         }
 
-        private string GetExtension(FileType type)
+        private static string GetExtension(FileType type)
         {
             switch (type)
             {
@@ -104,13 +134,13 @@ namespace GWTool
             }
         }
 
-        private Main.FileType AnalyzeFile(string file)
+        private static async Task<FileType> AnalyzeFileAsync(string file)
         {
-            byte[] buffer = new byte[3];
+            var buffer = new byte[3];
             string str;
             using (FileStream fileStream = new FileStream(file, FileMode.Open, FileAccess.Read))
             {
-                fileStream.Read(buffer, 0, buffer.Length);
+                _ = await fileStream.ReadAsync(buffer, 0, buffer.Length);
                 str = new SoapHexBinary(buffer).ToString();
             }
             switch (str)
@@ -177,7 +207,7 @@ namespace GWTool
             this.lblVersion.Name = "lblVersion";
             this.lblVersion.Size = new System.Drawing.Size(28, 13);
             this.lblVersion.TabIndex = 2;
-            this.lblVersion.Text = "v0.4";
+            this.lblVersion.Text = "v0.5";
             // 
             // btnOpenFile
             // 
@@ -213,6 +243,7 @@ namespace GWTool
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "GWTool";
             this.Load += new System.EventHandler(this.Main_Load);
+            this.FormClosing += new System.Windows.Forms.FormClosingEventHandler(this.Main_FormClosing);
             this.DragDrop += new System.Windows.Forms.DragEventHandler(this.Main_DragDrop);
             this.DragEnter += new System.Windows.Forms.DragEventHandler(this.Main_DragEnter);
             this.ResumeLayout(false);
@@ -232,14 +263,16 @@ namespace GWTool
         private void btnOpenFile_Click(object sender, EventArgs e)
         {
             this.openFileDialog1.ShowDialog();
-            if(this.openFileDialog1.FileName.Any())
+            if (this.openFileDialog1.FileName.Length != 0)
             {
-                if(File.Exists(this.openFileDialog1.FileName))
+                if (File.Exists(this.openFileDialog1.FileName))
                 {
-                    foreach (string file in (string[])this.openFileDialog1.FileNames)
+                    _task = ThreadHelper.Current.RunAsync(async delegate
                     {
-                        HandleFile(file);
-                    }
+                        await TaskScheduler.Default;
+                        foreach (var file in this.openFileDialog1.FileNames)
+                            await HandleFileAsync(file);
+                    });
                 }
             }
         }
@@ -251,10 +284,15 @@ namespace GWTool
                 return;
             }
 
-            if (File.Exists(args[1]))
-            {
-                HandleFile(args[1]);
-            }
+            var file = args[1];
+            if (File.Exists(file))
+                ThreadHelper.Current.Run(() => HandleFileAsync(file));
+        }
+
+        private void Main_FormClosing(object sender, CancelEventArgs e)
+        {
+            if (!(_task is null))
+                ThreadHelper.Current.Run(() => _task.JoinAsync());
         }
     }
 }
