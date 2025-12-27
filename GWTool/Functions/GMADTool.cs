@@ -5,26 +5,34 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace GWTool
+using AridityTeam.IO;
+
+namespace GWTool.Functions
 {
     public static class GMADTool
     {
-        public static int Extract(string gmaFile, string outputDir) =>
-            ThreadHelper.Current.JoinableTaskFactory.Run(() =>
-                ExtractAsync(gmaFile, outputDir, CancellationToken.None));
+        public static int Extract(string gmaFile, string outputDir,
+            IProgress<ExtractProgress> progress = null) =>
+            ThreadHelper.Current.Run(() =>
+                ExtractAsync(gmaFile, outputDir, CancellationToken.None, progress));
 
-        public static async Task<int> ExtractAsync(string gmaFile, string outputDir, CancellationToken token)
+        public static async Task<int> ExtractAsync(string gmaFile, string outputDir, CancellationToken token,
+            IProgress<ExtractProgress> progress = null)
         {
             if (token.IsCancellationRequested)
                 throw new TaskCanceledException();
 
-            using (var fs = new FileStream(gmaFile, FileMode.Open))
+            using (var fs = new FileStream(
+                gmaFile,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                4096,
+                useAsync: true))
             using (var reader = new BinaryReader(fs, Encoding.GetEncoding(1252)))
             {
-                uint i = reader.ReadUInt32();
-
-                if (i != 0x44414d47)
-                    // Invalid GMA file
+                uint magic = reader.ReadUInt32();
+                if (magic != 0x44414D47)
                     return 1;
 
                 fs.Seek(18, SeekOrigin.Current);
@@ -35,52 +43,88 @@ namespace GWTool
 
                 fs.Seek(4, SeekOrigin.Current);
 
-                // Store the information about all the compressed files
-                var compressedFiles = new List<object[]>();
-
+                var files = new List<GmaFileEntry>();
                 while (true)
                 {
                     uint filenum = reader.ReadUInt32();
                     if (filenum == 0)
                         break;
 
-                    object[] file = new object[2];
-                    file[0] = ReadString(reader);
-                    file[1] = reader.ReadUInt32();
+                    files.Add(new GmaFileEntry
+                    {
+                        Path = ReadString(reader),
+                        Size = reader.ReadUInt32()
+                    });
 
-                    compressedFiles.Add(file);
                     fs.Seek(8, SeekOrigin.Current);
                 }
 
-                // If list is empty, the archive is empty
-                if (compressedFiles.Count < 1)
-                {
-                    reader.Close();
-                    fs.Close();
+                if (files.Count == 0)
                     return 2;
-                }
 
-                // Create the addons directory
                 string addonDir = Path.Combine(outputDir, ScrubFileName(addonName));
-                if (!Directory.Exists(addonDir))
-                    Directory.CreateDirectory(addonDir);
+                Directory.CreateDirectory(addonDir);
 
-                foreach (object[] file in compressedFiles)
+                var progressState = new ExtractProgress
                 {
-                    byte[] fileContent = reader.ReadBytes(Convert.ToInt32(file[1]));
-                    string fileDir = Path.Combine(addonDir, Path.GetDirectoryName((string)file[0]));
-                    string fileName = Path.GetFileName((string)file[0]);
+                    TotalFiles = files.Count
+                };
 
-                    if (!Directory.Exists(fileDir))
-                        Directory.CreateDirectory(fileDir);
+                byte[] buffer = new byte[81920];
 
-                    File.WriteAllBytes(Path.Combine(fileDir, fileName), fileContent);
+                for (int i = 0; i < files.Count; i++)
+                {
+                    token.ThrowIfCancellationRequested();
+
+                    var entry = files[i];
+                    string fullPath = Path.Combine(addonDir, entry.Path);
+
+                    Directory.CreateDirectory(Path.GetDirectoryName(fullPath));
+
+                    using (var outStream = new FileStream(
+                        fullPath,
+                        FileMode.Create,
+                        FileAccess.Write,
+                        FileShare.None,
+                        4096,
+                        useAsync: true))
+                    {
+                        uint remaining = entry.Size;
+
+                        while (remaining > 0)
+                        {
+                            int toRead = (int)Math.Min(buffer.Length, remaining);
+                            int read = await fs.ReadAsync(buffer, 0, toRead, token)
+                                               .ConfigureAwait(false);
+
+                            if (read == 0)
+                                throw new EndOfStreamException();
+
+                            await outStream.WriteAsync(buffer, 0, read, token)
+                                           .ConfigureAwait(false);
+
+                            remaining -= (uint)read;
+                        }
+                    }
+
+                    progressState.FilesProcessed = i + 1;
+                    progressState.CurrentFile = entry.Path;
+                    progress?.Report(progressState);
                 }
 
                 string infoFilePath = Path.Combine(addonDir, "addon.txt");
 
-                //Create the info file
-                File.WriteAllText(infoFilePath, "\"AddonInfo\"\r\n{\r\n\t\"name\" \"" + addonName + "\"\r\n\t\"author_name\" \"" + addonAuthor + "\"\r\n\t\"info\" \"" + addonDesc + "\"\r\n}");
+                string infoText =
+                    "\"AddonInfo\"\r\n{\r\n" +
+                    "\t\"name\" \"" + addonName + "\"\r\n" +
+                    "\t\"author_name\" \"" + addonAuthor + "\"\r\n" +
+                    "\t\"info\" \"" + addonDesc + "\"\r\n}";
+
+                using (var sw = new StreamWriter(infoFilePath))
+                {
+                    await sw.WriteAsync(infoText, token);
+                    await sw.FlushAsync(token);
+                }
 
                 return 0;
             }
